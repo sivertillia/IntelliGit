@@ -13,6 +13,7 @@ import type {
     OutboundMessage,
 } from "./types";
 import { getVsCodeApi as getSharedVsCodeApi } from "../shared/vscodeApi";
+import { PYCHARM_THEME } from "../shared/theme";
 
 // --- VS Code API ---
 
@@ -178,6 +179,17 @@ function IconFilter(): React.ReactElement {
     );
 }
 
+function IconLock(): React.ReactElement {
+    return (
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path
+                fill="currentColor"
+                d="M11 6V5a3 3 0 00-6 0v1H4v8h8V6h-1zm-4-1a2 2 0 114 0v1H7V5zm3 8H6V7h4v6z"
+            />
+        </svg>
+    );
+}
+
 function HighlightedLine({ line }: { line: string }): React.ReactElement {
     if (!line) return <>{`\u00A0`}</>;
     if (line.trimStart().startsWith("//")) {
@@ -295,18 +307,18 @@ function ConflictSection({
                     />
                     <div className="conflict-actions-inline conflict-actions-left">
                         <button
-                            className={`action-btn accept-btn ${isOurs ? "active" : ""}`}
-                            onClick={() => onResolve(segment.id, isOurs ? "none" : "ours")}
-                            title="Accept yours"
-                        >
-                            <IconArrowRight />
-                        </button>
-                        <button
                             className="action-btn discard-btn"
                             onClick={() => onResolve(segment.id, "theirs")}
                             title="Ignore"
                         >
                             <IconClose />
+                        </button>
+                        <button
+                            className={`action-btn accept-btn ${isOurs ? "active" : ""}`}
+                            onClick={() => onResolve(segment.id, isOurs ? "none" : "ours")}
+                            title="Accept yours"
+                        >
+                            <IconArrowRight />
                         </button>
                     </div>
                 </div>
@@ -331,18 +343,18 @@ function ConflictSection({
                     />
                     <div className="conflict-actions-inline conflict-actions-right">
                         <button
-                            className="action-btn discard-btn"
-                            onClick={() => onResolve(segment.id, "ours")}
-                            title="Ignore"
-                        >
-                            <IconClose />
-                        </button>
-                        <button
                             className={`action-btn accept-btn ${isTheirs ? "active" : ""}`}
                             onClick={() => onResolve(segment.id, isTheirs ? "none" : "theirs")}
                             title="Accept theirs"
                         >
                             <IconArrowLeft />
+                        </button>
+                        <button
+                            className="action-btn discard-btn"
+                            onClick={() => onResolve(segment.id, "ours")}
+                            title="Ignore"
+                        >
+                            <IconClose />
                         </button>
                     </div>
                 </div>
@@ -516,14 +528,24 @@ function App() {
 
             <div className="pane-meta-row">
                 <div className="pane-meta">
-                    <span>Changes from {state.data.oursLabel}</span>
+                    <span className="pane-meta-label">
+                        <span className="toolbar-icon" style={{ marginRight: "6px" }}>
+                            <IconLock />
+                        </span>
+                        Changes from {state.data.oursLabel}
+                    </span>
                     <span className="show-details">Show Details</span>
                 </div>
                 <div className="pane-meta pane-meta-center">
-                    <span>Result</span>
+                    <span>Result {state.data.filePath}</span>
                 </div>
                 <div className="pane-meta pane-meta-right">
-                    <span>Changes from {state.data.theirsLabel}</span>
+                    <span className="pane-meta-label">
+                        <span className="toolbar-icon" style={{ marginRight: "6px" }}>
+                            <IconLock />
+                        </span>
+                        Changes from {state.data.theirsLabel}
+                    </span>
                     <span className="show-details">Show Details</span>
                 </div>
             </div>
@@ -713,6 +735,10 @@ const STYLES = `
     font-size: 11px;
     border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 }
+.pane-meta-label {
+    display: flex;
+    align-items: center;
+}
 .pane-meta-center {
     justify-content: center;
     color: var(--vscode-foreground);
@@ -797,20 +823,21 @@ const STYLES = `
 }
 .conflict-actions-inline {
     position: absolute;
-    top: 4px;
+    top: 50%;
+    transform: translateY(-50%);
     display: flex;
     gap: 0;
     z-index: 10;
 }
 .conflict-actions-left {
-    right: 0px; /* Position directly on the border edge */
+    right: -21px; /* Overlap exactly on the middle column */
 }
 .conflict-actions-right {
-    left: 0px; /* Position directly on the border edge */
+    left: -21px; /* Overlap exactly on the middle column */
 }
 .action-btn {
     width: 20px;
-    height: 18px;
+    height: 20px;
     border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
     cursor: pointer;
     display: flex;
@@ -820,9 +847,11 @@ const STYLES = `
     line-height: 1;
     background: var(--vscode-editorGroupHeader-tabsBackground);
     color: var(--vscode-foreground);
+    opacity: 0.9;
 }
 .action-btn:hover {
-    background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.08));
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.15));
+    opacity: 1;
 }
 .accept-btn.active {
     border-color: var(--vscode-focusBorder, #4ea1ff);
@@ -835,19 +864,19 @@ const STYLES = `
 }
 
 .conflict-ours .code-line {
-    background: var(--vscode-merge-currentContentBackground, var(--vscode-diffEditor-removedLineBackground, rgba(116, 46, 53, 0.35)));
+    background: ${PYCHARM_THEME.mergeEditor.conflictBlockBg};
     color: var(--vscode-editor-foreground);
 }
 .conflict-theirs .code-line {
-    background: var(--vscode-merge-incomingContentBackground, var(--vscode-diffEditor-insertedLineBackground, rgba(56, 118, 66, 0.28)));
+    background: ${PYCHARM_THEME.mergeEditor.conflictBlockBg};
     color: var(--vscode-editor-foreground);
 }
 .conflict-result.unresolved .code-line {
-    background: var(--vscode-diffEditor-removedLineBackground, rgba(111, 40, 44, 0.55));
+    background: ${PYCHARM_THEME.mergeEditor.conflictResultBg};
     color: var(--vscode-editor-foreground);
 }
 .conflict-result.resolved .code-line {
-    background: var(--vscode-diffEditor-insertedLineBackground, rgba(57, 127, 78, 0.28));
+    background: ${PYCHARM_THEME.mergeEditor.addedResultBg};
     color: var(--vscode-editor-foreground);
 }
 
@@ -857,10 +886,10 @@ const STYLES = `
 }
 
 .column-left.accepted .conflict-ours .code-line {
-    background: var(--vscode-merge-currentContentBackground, var(--vscode-diffEditor-removedLineBackground, rgba(116, 46, 53, 0.5)));
+    background: ${PYCHARM_THEME.mergeEditor.conflictBlockBg};
 }
 .column-right.accepted .conflict-theirs .code-line {
-    background: var(--vscode-merge-incomingContentBackground, var(--vscode-diffEditor-insertedLineBackground, rgba(56, 118, 66, 0.36)));
+    background: ${PYCHARM_THEME.mergeEditor.conflictBlockBg};
 }
 
 .merge-footer {
