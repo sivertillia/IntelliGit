@@ -11,6 +11,7 @@ import { CommitGraphViewProvider } from "./views/CommitGraphViewProvider";
 import { CommitInfoViewProvider } from "./views/CommitInfoViewProvider";
 import { CommitPanelViewProvider } from "./views/CommitPanelViewProvider";
 import { MergeConflictsTreeProvider } from "./views/MergeConflictsTreeProvider";
+import { MergeEditorPanel } from "./views/MergeEditorPanel";
 import type { Branch } from "./types";
 import type { CommitAction } from "./webviews/react/commitGraphTypes";
 import { getErrorMessage, isBranchNotFullyMergedError } from "./utils/errors";
@@ -66,6 +67,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
     const updateConflictCount = (count: number) => {
         mergeConflictsView.description = count > 0 ? `${count}` : "";
+        vscode.commands.executeCommand("setContext", "intelligit.hasMergeConflicts", count > 0);
     };
     const refreshMergeConflicts = async () => {
         updateConflictCount(await mergeConflicts.refresh());
@@ -672,52 +674,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand("intelligit.openMergeConflict", async (ctx: unknown) => {
             const filePath = resolveConflictPath(ctx);
             if (!filePath) return;
-            const uri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+            MergeEditorPanel.open(
+                context.extensionUri,
+                gitOps,
+                workspaceFolder.uri,
+                filePath,
+                async () => {
+                    await commitPanel.refresh();
+                    await refreshMergeConflicts();
+                },
+            );
+        }),
+        vscode.commands.registerCommand("intelligit.conflictAcceptYours", async (ctx: unknown) => {
+            const filePath = resolveConflictPath(ctx);
+            if (!filePath) return;
             try {
-                await vscode.commands.executeCommand("vscode.open", uri);
-            } catch {
-                await vscode.window.showTextDocument(uri);
+                await runWithNotificationProgress(
+                    `Accepting yours for ${filePath}...`,
+                    async () => {
+                        await gitOps.acceptConflictSide(filePath, "ours");
+                    },
+                );
+                vscode.window.showInformationMessage(`Accepted yours for ${filePath}`);
+                await commitPanel.refresh();
+                await refreshMergeConflicts();
+            } catch (error) {
+                const message = getErrorMessage(error);
+                vscode.window.showErrorMessage(`Accept yours failed: ${message}`);
             }
         }),
-        vscode.commands.registerCommand(
-            "intelligit.conflictAcceptYours",
-            async (ctx: unknown) => {
-                const filePath = resolveConflictPath(ctx);
-                if (!filePath) return;
-                try {
-                    await runWithNotificationProgress(`Accepting yours for ${filePath}...`, async () => {
-                        await gitOps.acceptConflictSide(filePath, "ours");
-                    });
-                    vscode.window.showInformationMessage(`Accepted yours for ${filePath}`);
-                    await commitPanel.refresh();
-                    await refreshMergeConflicts();
-                } catch (error) {
-                    const message = getErrorMessage(error);
-                    vscode.window.showErrorMessage(`Accept yours failed: ${message}`);
-                }
-            },
-        ),
-        vscode.commands.registerCommand(
-            "intelligit.conflictAcceptTheirs",
-            async (ctx: unknown) => {
-                const filePath = resolveConflictPath(ctx);
-                if (!filePath) return;
-                try {
-                    await runWithNotificationProgress(
-                        `Accepting theirs for ${filePath}...`,
-                        async () => {
-                            await gitOps.acceptConflictSide(filePath, "theirs");
-                        },
-                    );
-                    vscode.window.showInformationMessage(`Accepted theirs for ${filePath}`);
-                    await commitPanel.refresh();
-                    await refreshMergeConflicts();
-                } catch (error) {
-                    const message = getErrorMessage(error);
-                    vscode.window.showErrorMessage(`Accept theirs failed: ${message}`);
-                }
-            },
-        ),
+        vscode.commands.registerCommand("intelligit.conflictAcceptTheirs", async (ctx: unknown) => {
+            const filePath = resolveConflictPath(ctx);
+            if (!filePath) return;
+            try {
+                await runWithNotificationProgress(
+                    `Accepting theirs for ${filePath}...`,
+                    async () => {
+                        await gitOps.acceptConflictSide(filePath, "theirs");
+                    },
+                );
+                vscode.window.showInformationMessage(`Accepted theirs for ${filePath}`);
+                await commitPanel.refresh();
+                await refreshMergeConflicts();
+            } catch (error) {
+                const message = getErrorMessage(error);
+                vscode.window.showErrorMessage(`Accept theirs failed: ${message}`);
+            }
+        }),
     );
 
     // --- Branch action commands ---
@@ -1152,7 +1155,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (lightTimer) clearTimeout(lightTimer);
         lightTimer = setTimeout(async () => {
             await commitPanel.refresh();
-            await refreshMergeConflicts();
         }, 300);
     };
 
@@ -1213,7 +1215,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // --- Disposables ---
 
-    context.subscriptions.push(commitGraph, commitInfo, commitPanel);
+    context.subscriptions.push(commitGraph, commitInfo, commitPanel, mergeConflicts);
 }
 
 export function deactivate(): void {}

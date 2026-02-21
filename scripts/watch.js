@@ -56,6 +56,20 @@ async function watch() {
     });
     await commitInfoCtx.watch();
     console.log("Watching webview: commitinfo");
+
+    const mergeEditorCtx = await esbuild.context({
+        entryPoints: [
+            path.resolve(__dirname, "../src/webviews/react/merge-editor/MergeEditorApp.tsx"),
+        ],
+        bundle: true,
+        outfile: path.resolve(__dirname, "../dist/webview-mergeeditor.js"),
+        format: "esm",
+        platform: "browser",
+        target: "es2022",
+        sourcemap: true,
+    });
+    await mergeEditorCtx.watch();
+    console.log("Watching webview: mergeeditor");
 }
 
 watch().catch((err) => {

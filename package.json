@@ -67,7 +67,8 @@
                 },
                 {
                     "id": "intelligit.mergeConflicts",
-                    "name": "Merge Conflicts"
+                    "name": "Merge Conflicts",
+                    "when": "intelligit.hasMergeConflicts"
                 },
                 {
                     "id": "intelligit.fileCountBadge",

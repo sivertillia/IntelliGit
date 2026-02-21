@@ -136,6 +136,8 @@ const gitOpsState = {
     getShelvedFiles: vi.fn(async () => []),
     getConflictedFiles: vi.fn(async () => []),
     acceptConflictSide: vi.fn(async () => undefined),
+    getConflictFileVersions: vi.fn(async () => ({ base: "", ours: "", theirs: "" })),
+    stageFile: vi.fn(async () => undefined),
 };
 
 const deleteFileWithFallback = vi.fn(async () => true);
@@ -229,6 +231,7 @@ vi.mock("vscode", () => ({
         constructor(_label: string, _state?: unknown) {}
     },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+    ViewColumn: { One: 1, Two: 2, Three: 3 },
     ProgressLocation: { Notification: 15 },
     Uri: {
         file: (value: string) => ({ fsPath: value, path: value }),
@@ -255,6 +258,31 @@ vi.mock("vscode", () => ({
             badge: undefined,
             dispose: vi.fn(),
         })),
+        createWebviewPanel: vi.fn(() => {
+            const msgListeners: Array<(msg: unknown) => void> = [];
+            const disposeListeners: Array<() => void> = [];
+            return {
+                webview: {
+                    options: {},
+                    html: "",
+                    onDidReceiveMessage: vi.fn((listener: (msg: unknown) => void) => {
+                        msgListeners.push(listener);
+                        return { dispose: vi.fn() };
+                    }),
+                    postMessage: vi.fn(async () => true),
+                    asWebviewUri: vi.fn((uri: { path?: string }) => uri),
+                    cspSource: "https://test.csp",
+                },
+                onDidDispose: vi.fn((listener: () => void) => {
+                    disposeListeners.push(listener);
+                    return { dispose: vi.fn() };
+                }),
+                reveal: vi.fn(),
+                dispose: vi.fn(() => {
+                    for (const listener of disposeListeners) listener();
+                }),
+            };
+        }),
         showInformationMessage,
         showErrorMessage,
         showWarningMessage,
@@ -321,6 +349,8 @@ vi.mock("../../src/git/operations", async (importOriginal) => {
             getShelvedFiles = gitOpsState.getShelvedFiles;
             getConflictedFiles = gitOpsState.getConflictedFiles;
             acceptConflictSide = gitOpsState.acceptConflictSide;
+            getConflictFileVersions = gitOpsState.getConflictFileVersions;
+            stageFile = gitOpsState.stageFile;
         },
     };
 });

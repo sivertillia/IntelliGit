@@ -3,7 +3,10 @@ import * as vscode from "vscode";
 import { GitOps } from "../git/operations";
 
 export class MergeConflictTreeItem extends vscode.TreeItem {
-    constructor(public readonly filePath: string, workspaceRoot: vscode.Uri) {
+    constructor(
+        public readonly filePath: string,
+        workspaceRoot: vscode.Uri,
+    ) {
         const label = path.basename(filePath) || filePath;
         super(label, vscode.TreeItemCollapsibleState.None);
         this.description = path.dirname(filePath) === "." ? undefined : path.dirname(filePath);
@@ -22,9 +25,7 @@ export class MergeConflictTreeItem extends vscode.TreeItem {
     }
 }
 
-export class MergeConflictsTreeProvider
-    implements vscode.TreeDataProvider<MergeConflictTreeItem>
-{
+export class MergeConflictsTreeProvider implements vscode.TreeDataProvider<MergeConflictTreeItem> {
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -51,5 +52,8 @@ export class MergeConflictsTreeProvider
             (filePath) => new MergeConflictTreeItem(filePath, this.workspaceRoot),
         );
     }
-}
 
+    dispose(): void {
+        this._onDidChangeTreeData.dispose();
+    }
+}

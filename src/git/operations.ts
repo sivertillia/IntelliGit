@@ -654,6 +654,21 @@ export class GitOps {
             .filter(Boolean);
     }
 
+    async getConflictFileVersions(
+        filePath: string,
+    ): Promise<{ base: string; ours: string; theirs: string }> {
+        const [base, ours, theirs] = await Promise.all([
+            this.executor.run(["show", `:1:${filePath}`]).catch(() => ""),
+            this.executor.run(["show", `:2:${filePath}`]),
+            this.executor.run(["show", `:3:${filePath}`]),
+        ]);
+        return { base, ours, theirs };
+    }
+
+    async stageFile(filePath: string): Promise<void> {
+        await this.executor.run(["add", "--", filePath]);
+    }
+
     async acceptConflictSide(filePath: string, side: "ours" | "theirs"): Promise<void> {
         const sideArg = side === "ours" ? "--ours" : "--theirs";
         await this.executor.run(["checkout", sideArg, "--", filePath]);
