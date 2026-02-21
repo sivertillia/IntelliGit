@@ -267,7 +267,7 @@ function CommonSection({
             <div className="column column-left">
                 <CodeBlock lines={segment.lines} startLine={startLine} lineCount={lineCount} />
             </div>
-            <div className="column column-middle">
+            <div className="column column-middle result-column">
                 <CodeBlock lines={segment.lines} startLine={startLine} lineCount={lineCount} />
             </div>
             <div className="column column-right">
@@ -305,7 +305,7 @@ function ConflictSection({
                         lineCount={lineCount}
                         className="conflict-ours"
                     />
-                    <div className="conflict-actions-inline conflict-actions-left">
+                    <div className="conflict-actions-left">
                         <button
                             className="action-btn discard-btn"
                             onClick={() => onResolve(segment.id, "theirs")}
@@ -316,7 +316,7 @@ function ConflictSection({
                         <button
                             className={`action-btn accept-btn ${isOurs ? "active" : ""}`}
                             onClick={() => onResolve(segment.id, isOurs ? "none" : "ours")}
-                            title="Accept yours"
+                            title="Accept"
                         >
                             <IconArrowRight />
                         </button>
@@ -335,17 +335,11 @@ function ConflictSection({
                 <div
                     className={`column column-right conflict-column ${isTheirs ? "accepted" : ""}`}
                 >
-                    <CodeBlock
-                        lines={segment.theirsLines}
-                        startLine={startLine}
-                        lineCount={lineCount}
-                        className="conflict-theirs"
-                    />
-                    <div className="conflict-actions-inline conflict-actions-right">
+                    <div className="conflict-actions-right">
                         <button
                             className={`action-btn accept-btn ${isTheirs ? "active" : ""}`}
                             onClick={() => onResolve(segment.id, isTheirs ? "none" : "theirs")}
-                            title="Accept theirs"
+                            title="Accept"
                         >
                             <IconArrowLeft />
                         </button>
@@ -357,6 +351,12 @@ function ConflictSection({
                             <IconClose />
                         </button>
                     </div>
+                    <CodeBlock
+                        lines={segment.theirsLines}
+                        startLine={startLine}
+                        lineCount={lineCount}
+                        className="conflict-theirs"
+                    />
                 </div>
             </div>
         </div>
@@ -770,7 +770,7 @@ const STYLES = `
 .column {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
+    /* overflow: hidden; Removed to allow action buttons to float outside */
     border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 }
 .column-right {
@@ -779,6 +779,7 @@ const STYLES = `
 .code-block {
     display: grid;
     grid-template-columns: 46px 1fr;
+    overflow: hidden; /* Added overflow hidden just to code block instead of column */
 }
 .line-numbers {
     background: var(--vscode-editorGutter-background, var(--vscode-sideBar-background, transparent));
@@ -821,19 +822,21 @@ const STYLES = `
 .hunk-columns {
     display: flex;
 }
-.conflict-actions-inline {
+.conflict-actions-left {
     position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 0;
+    right: 0;
     display: flex;
     gap: 0;
     z-index: 10;
 }
-.conflict-actions-left {
-    right: -21px; /* Overlap exactly on the middle column */
-}
 .conflict-actions-right {
-    left: -21px; /* Overlap exactly on the middle column */
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    gap: 0;
+    z-index: 10;
 }
 .action-btn {
     width: 20px;
@@ -847,7 +850,7 @@ const STYLES = `
     line-height: 1;
     background: var(--vscode-editorGroupHeader-tabsBackground);
     color: var(--vscode-foreground);
-    opacity: 0.9;
+    opacity: 0.95;
 }
 .action-btn:hover {
     background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.15));
