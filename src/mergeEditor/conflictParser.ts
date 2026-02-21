@@ -161,6 +161,7 @@ function buildSegments(
     let bi = 0;
 
     while (bi <= baseLen) {
+        const cursor = bi;
         const oursEdit = oursMap.get(bi);
         const theirsEdit = theirsMap.get(bi);
 
@@ -206,7 +207,14 @@ function buildSegments(
             });
         }
 
-        bi = endBase;
+        if (endBase === cursor) {
+            // Pure insertion hunks do not consume base lines. Mark this position as
+            // processed so the loop can continue with the same base cursor.
+            oursMap.delete(cursor);
+            theirsMap.delete(cursor);
+        } else {
+            bi = endBase;
+        }
     }
 
     return mergeAdjacentCommon(segments);
