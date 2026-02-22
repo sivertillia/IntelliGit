@@ -319,7 +319,7 @@ function renderSyntaxHighlightedNodes(line: string, keyPrefix: string): React.Re
         last = start + token.length;
     }
     if (last < line.length) {
-        nodes.push(<span key={`${keyPrefix}-txt-${idx++}`}>{line.slice(last)}</span>);
+        nodes.push(<span key={`${keyPrefix}-txt-${idx}`}>{line.slice(last)}</span>);
     }
     return nodes;
 }
@@ -1393,7 +1393,6 @@ function App() {
                         ({
                             segment,
                             index,
-                            startLine,
                             lineCount,
                             lineNumbers,
                             conflictOrdinal,

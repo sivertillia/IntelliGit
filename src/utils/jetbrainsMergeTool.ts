@@ -159,7 +159,7 @@ async function walkDirectories(
 
         await options.onDirectory?.(dirPath);
 
-        let entries: Array<{ isDirectory(): boolean; name: string }> | null = null;
+        let entries: Array<{ isDirectory(): boolean; name: string }>;
         try {
             entries = (await fsp.readdir(dirPath, { withFileTypes: true })) as Array<{
                 isDirectory(): boolean;
@@ -168,7 +168,6 @@ async function walkDirectories(
         } catch {
             return;
         }
-        if (!entries) return;
 
         for (const entry of entries) {
             if (!entry.isDirectory()) continue;

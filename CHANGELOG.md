@@ -5,6 +5,35 @@ All notable changes to IntelliGit will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-02-22
+
+### Added
+
+- External JetBrains merge tool integration for merge conflicts (PyCharm/IntelliJ IDEA/WebStorm and other JetBrains IDEs) using Git conflict stages (`base/ours/theirs`) and the IDE `merge` command.
+- macOS `.app` bundle path support for JetBrains merge tool configuration, including automatic executable resolution from `Contents/Info.plist` (`CFBundleExecutable`) with fallback scanning of `Contents/MacOS`.
+- JetBrains IDE auto-detection for merge tool setup:
+    - macOS: `/Applications`, `~/Applications`, and JetBrains Toolbox installs
+    - Windows: standard JetBrains install directories and JetBrains Toolbox installs
+- `IntelliGit: Detect JetBrains Merge Tool` command with Quick Pick selection of detected JetBrains IDEs and manual-entry fallback.
+- Editor context submenu `IntelliGit` (right-click in file editor) with:
+    - `Compare with Revision`
+    - `Compare with Branch`
+- Git file comparison helpers to load file content at a selected revision/branch and open VS Code diffs against the working tree file.
+
+### Changed
+
+- `Open Merge Conflict` now uses only two merge editor paths:
+    - JetBrains merge tool (when `intelligit.jetbrainsMergeTool.preferExternal` is enabled and a JetBrains path is configured)
+    - VS Code internal merge editor (default fallback)
+- IntelliGit custom merge editor is no longer used in the merge-conflict open flow.
+- JetBrains merge tool path prompt now validates the entered path immediately and shows the resolved executable path in the confirmation message for easier setup/debugging.
+- `intelligit.jetbrainsMergeTool.preferExternal` setting description updated to document VS Code internal merge editor fallback behavior.
+
+### Fixed
+
+- Fixed macOS JetBrains `.app` path launch failures caused by trying to execute the app bundle directory directly (`EACCES`) by resolving the actual binary before launch.
+- Fixed merge-conflict command registration syntax regression introduced while wiring JetBrains merge-tool commands.
+
 ## [0.4.0] - 2026-02-20
 
 ### Added

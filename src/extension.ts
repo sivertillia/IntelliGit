@@ -10,6 +10,7 @@ import { GitOps, UpstreamPushDeclinedError } from "./git/operations";
 import { CommitGraphViewProvider } from "./views/CommitGraphViewProvider";
 import { CommitInfoViewProvider } from "./views/CommitInfoViewProvider";
 import { CommitPanelViewProvider } from "./views/CommitPanelViewProvider";
+import { MergeConflictSessionPanel } from "./views/MergeConflictSessionPanel";
 import { MergeConflictsTreeProvider } from "./views/MergeConflictsTreeProvider";
 import type { Branch } from "./types";
 import type { CommitAction } from "./webviews/react/commitGraphTypes";
@@ -83,11 +84,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await refreshMergeConflicts();
     };
 
+    const getIntelliGitConfig = (): vscode.WorkspaceConfiguration | null => {
+        const getConfiguration = vscode.workspace.getConfiguration;
+        if (typeof getConfiguration !== "function") return null;
+        return getConfiguration.call(vscode.workspace, "intelligit");
+    };
+
     const getJetBrainsMergeToolPath = (): string => {
-        return vscode.workspace
-            .getConfiguration("intelligit")
-            .get<string>("jetbrainsMergeTool.path", "")
-            .trim();
+        return getIntelliGitConfig()?.get<string>("jetbrainsMergeTool.path", "").trim() ?? "";
     };
 
     const getDefaultJetBrainsMergeToolPath = (): string => {
@@ -119,9 +123,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             return null;
         }
 
-        await vscode.workspace
-            .getConfiguration("intelligit")
-            .update("jetbrainsMergeTool.path", trimmed, vscode.ConfigurationTarget.Global);
+        const config = getIntelliGitConfig();
+        if (config && typeof config.update === "function") {
+            await config.update("jetbrainsMergeTool.path", trimmed, vscode.ConfigurationTarget.Global);
+        }
 
         const resolutionText =
             resolvedBinaryPath === trimmed
@@ -272,15 +277,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
 
     const openMergeConflictForFile = async (filePath: string): Promise<void> => {
-        const preferExternal = vscode.workspace
-            .getConfiguration("intelligit")
-            .get<boolean>("jetbrainsMergeTool.preferExternal", true);
+        const preferExternal =
+            getIntelliGitConfig()?.get<boolean>("jetbrainsMergeTool.preferExternal", true) ?? true;
 
         if (preferExternal && getJetBrainsMergeToolPath()) {
             const opened = await openJetBrainsMergeToolForFile(filePath);
             if (opened) return;
         }
         await openBuiltInMergeEditorForFile(filePath);
+    };
+
+    const openConflictSession = async (labels?: {
+        sourceBranch?: string;
+        targetBranch?: string;
+    }): Promise<void> => {
+        await MergeConflictSessionPanel.open(context.extensionUri, gitOps, labels ?? {}, {
+            onOpenMergeConflict: async (filePath) => {
+                await openMergeConflictForFile(filePath);
+            },
+            onConflictStateChanged: async () => {
+                await refreshConflictUi();
+            },
+        });
     };
 
     const normalizeGitPath = (fsPathValue: string): string => fsPathValue.split(path.sep).join("/");
@@ -1042,6 +1060,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand("intelligit.compareWithBranch", async (ctx?: unknown) => {
             await compareEditorFileWithBranch(ctx);
         }),
+        vscode.commands.registerCommand("intelligit.openConflictSession", async () => {
+            const conflicts = await gitOps.getConflictFilesDetailed();
+            if (conflicts.length === 0) {
+                vscode.window.showInformationMessage("No unresolved merge conflicts found.");
+                return;
+            }
+            await openConflictSession();
+        }),
         vscode.commands.registerCommand("intelligit.detectJetBrainsMergeTool", async () => {
             await detectAndPickJetBrainsMergeToolPath();
         }),
@@ -1196,6 +1222,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     vscode.window.showInformationMessage(`Merged ${name}`);
                     await vscode.commands.executeCommand("intelligit.refresh");
                 } catch (err) {
+                    try {
+                        const conflicts = await gitOps.getConflictFilesDetailed();
+                        if (conflicts.length > 0) {
+                            await openConflictSession({
+                                sourceBranch: name,
+                                targetBranch: getCurrentBranchName() || undefined,
+                            });
+                            await refreshConflictUi();
+                            vscode.window.showWarningMessage(
+                                `Merge produced ${conflicts.length} unresolved conflict file${conflicts.length === 1 ? "" : "s"}. Opened Conflicts session.`,
+                            );
+                            return;
+                        }
+                    } catch {
+                        // Fall back to merge error if conflict inspection/session launch fails.
+                    }
                     const msg = getErrorMessage(err);
                     vscode.window.showErrorMessage(`Merge failed: ${msg}`);
                 }
