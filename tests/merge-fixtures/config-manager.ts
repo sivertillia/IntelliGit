@@ -71,7 +71,7 @@ export class ConfigManager {
       },
     };
 
-    return this.config;
+    return deepFreeze(cloneAppConfig(this.config));
   }
 
   loadFromEnv(): void {
@@ -127,7 +127,7 @@ export class ConfigManager {
   // SECTION 3c: Runtime overrides and feature flags
   // ----------------------------------------------------------
   setOverride(key: string, value: unknown): void {
-    if (this.overrides.size >= MAX_CACHE_SIZE) {
+    if (!this.overrides.has(key) && this.overrides.size >= MAX_CACHE_SIZE) {
       const firstKey = this.overrides.keys().next().value;
       if (firstKey !== undefined) {
         this.overrides.delete(firstKey);

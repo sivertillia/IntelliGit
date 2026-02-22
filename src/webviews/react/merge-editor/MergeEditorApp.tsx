@@ -34,6 +34,9 @@ type Action =
     | { type: "SET_ERROR"; message: string }
     | { type: "RESOLVE_HUNK"; id: number; resolution: HunkResolution };
 
+const TOKEN_REGEX =
+    /("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|`([^`\\]|\\.)*`)|\b(import|from|const|let|var|class|interface|type|function|return|if|else|for|while|switch|case|break|continue|new|export|default|private|public|protected|readonly|static|async|await)\b|\b(true|false|null|undefined)\b|\b\d+(\.\d+)?\b/g;
+
 function reducer(state: State, action: Action): State {
     switch (action.type) {
         case "SET_DATA":
@@ -73,10 +76,8 @@ function getResultLines(
     }
 }
 
-function buildResultContent(
-    segments: MergeSegment[],
-    resolutions: Record<number, HunkResolution>,
-): string {
+function buildResultContent(data: MergeEditorData, resolutions: Record<number, HunkResolution>): string {
+    const { segments } = data;
     const lines: string[] = [];
     for (const seg of segments) {
         if (seg.type === "common") {
@@ -85,7 +86,9 @@ function buildResultContent(
             lines.push(...getResultLines(seg, resolutions[seg.id]));
         }
     }
-    return lines.join("\n");
+    const eol = data.eol ?? "\n";
+    const joined = lines.join(eol);
+    return data.hasTrailingNewline ? joined + eol : joined;
 }
 
 function allResolved(
@@ -296,13 +299,11 @@ function renderSyntaxHighlightedNodes(line: string, keyPrefix: string): React.Re
         ];
     }
 
-    const tokenRegex =
-        /("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|`([^`\\]|\\.)*`)|\b(import|from|const|let|var|class|interface|type|function|return|if|else|for|while|switch|case|break|continue|new|export|default|private|public|protected|readonly|static|async|await)\b|\b(true|false|null|undefined)\b|\b\d+(\.\d+)?\b/g;
     const nodes: React.ReactNode[] = [];
     let last = 0;
     let idx = 0;
 
-    for (const match of line.matchAll(tokenRegex)) {
+    for (const match of line.matchAll(TOKEN_REGEX)) {
         const start = match.index ?? 0;
         if (start > last) {
             nodes.push(<span key={`${keyPrefix}-txt-${idx++}`}>{line.slice(last, start)}</span>);
@@ -1065,7 +1066,7 @@ function App() {
 
     const handleApply = useCallback(() => {
         if (!state.data) return;
-        const content = buildResultContent(state.data.segments, state.resolutions);
+        const content = buildResultContent(state.data, state.resolutions);
         getVsCodeApi().postMessage({ type: "applyResolution", content });
     }, [state.data, state.resolutions]);
 

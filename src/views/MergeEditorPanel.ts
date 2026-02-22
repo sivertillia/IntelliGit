@@ -27,11 +27,6 @@ export class MergeEditorPanel {
     ) {
         this.panel = panel;
 
-        panel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
-        };
-
         panel.webview.html = this.getHtml(panel.webview);
 
         panel.webview.onDidReceiveMessage(async (msg) => {
@@ -67,7 +62,11 @@ export class MergeEditorPanel {
             "intelligit.mergeEditor",
             `Merge: ${filePath}`,
             vscode.ViewColumn.One,
-            { enableScripts: true, retainContextWhenHidden: true },
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
+            },
         );
 
         const instance = new MergeEditorPanel(
@@ -147,6 +146,9 @@ export class MergeEditorPanel {
     private async loadConflictData(): Promise<void> {
         try {
             const versions = await this.gitOps.getConflictFileVersions(this.filePath);
+            const textFormat = await this.detectTextFormatForOutput().catch(() =>
+                detectTextFormatFromText(versions.ours),
+            );
             const segments = parseConflictVersions(
                 versions.base,
                 versions.ours,
@@ -159,6 +161,8 @@ export class MergeEditorPanel {
                 segments,
                 oursLabel: this.oursSourceLabel,
                 theirsLabel: this.theirsSourceLabel,
+                eol: textFormat.eol,
+                hasTrailingNewline: textFormat.hasTrailingNewline,
                 diffOptions: this.diffOptions,
             };
 
@@ -178,4 +182,19 @@ export class MergeEditorPanel {
             title: "Merge Editor",
         });
     }
+
+    private async detectTextFormatForOutput(): Promise<{ eol: "\n" | "\r\n"; hasTrailingNewline: boolean }> {
+        const fileUri = vscode.Uri.joinPath(this.workspaceRoot, this.filePath);
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        const text = Buffer.from(bytes).toString("utf8");
+        return detectTextFormatFromText(text);
+    }
+}
+
+function detectTextFormatFromText(text: string): { eol: "\n" | "\r\n"; hasTrailingNewline: boolean } {
+    const newlineIdx = text.indexOf("\n");
+    const eol: "\n" | "\r\n" =
+        newlineIdx > 0 && text.charAt(newlineIdx - 1) === "\r" ? "\r\n" : "\n";
+    const hasTrailingNewline = text.endsWith("\r\n") || text.endsWith("\n");
+    return { eol, hasTrailingNewline };
 }

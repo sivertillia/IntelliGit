@@ -28,15 +28,10 @@ export class MergeConflictSessionPanel {
         private readonly extensionUri: vscode.Uri,
         private readonly gitOps: GitOps,
         labels: MergeConflictSessionLabels,
-        private readonly callbacks: MergeConflictSessionCallbacks,
+        private callbacks: MergeConflictSessionCallbacks,
     ) {
         this.panel = panel;
         this.updateLabels(labels);
-
-        panel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
-        };
 
         panel.webview.html = this.getHtml(panel.webview);
 
@@ -47,7 +42,12 @@ export class MergeConflictSessionPanel {
                 if (!this.isPanelActive()) return;
                 const message = getErrorMessage(error);
                 vscode.window.showErrorMessage(message);
-                await this.panel.webview.postMessage({ type: "loadError", message });
+                try {
+                    if (!this.isPanelActive()) return;
+                    await this.panel.webview.postMessage({ type: "loadError", message });
+                } catch {
+                    // Panel may have been disposed between the active check and postMessage.
+                }
             }
         });
 
@@ -68,6 +68,7 @@ export class MergeConflictSessionPanel {
         const existing = MergeConflictSessionPanel.currentPanel;
         if (existing && !existing.disposed) {
             existing.updateLabels(labels);
+            existing.updateCallbacks(callbacks);
             existing.panel.reveal(vscode.ViewColumn.Active);
             await existing.postSessionData({ closeWhenResolved: false });
             return;
@@ -77,7 +78,11 @@ export class MergeConflictSessionPanel {
             "intelligit.mergeConflictSession",
             "Conflicts",
             vscode.ViewColumn.Active,
-            { enableScripts: true, retainContextWhenHidden: true },
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [vscode.Uri.joinPath(extensionUri, "dist")],
+            },
         );
 
         const instance = new MergeConflictSessionPanel(
@@ -107,6 +112,10 @@ export class MergeConflictSessionPanel {
         const target = labels.targetBranch?.trim();
         this.sourceBranch = source || this.sourceBranch;
         this.targetBranch = target || this.targetBranch;
+    }
+
+    private updateCallbacks(callbacks: MergeConflictSessionCallbacks): void {
+        this.callbacks = callbacks;
     }
 
     private async handleMessage(msg: { type?: unknown; filePath?: unknown }): Promise<void> {

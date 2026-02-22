@@ -25,6 +25,8 @@ export interface MergeEditorData {
     segments: MergeSegment[];
     oursLabel: string;
     theirsLabel: string;
+    eol?: "\n" | "\r\n";
+    hasTrailingNewline?: boolean;
     diffOptions?: MergeDiffOptions;
 }
 
@@ -114,10 +116,15 @@ function computeLCS(a: string[], b: string[]): Array<[number, number]> {
         return greedyMonotonicLineMatch(a, b);
     }
 
-    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    const stride = n + 1;
+    const dp = new Int32Array((m + 1) * stride);
     for (let i = m - 1; i >= 0; i--) {
         for (let j = n - 1; j >= 0; j--) {
-            dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+            const idx = i * stride + j;
+            dp[idx] =
+                a[i] === b[j]
+                    ? dp[(i + 1) * stride + (j + 1)] + 1
+                    : Math.max(dp[(i + 1) * stride + j], dp[i * stride + (j + 1)]);
         }
     }
 
@@ -129,7 +136,7 @@ function computeLCS(a: string[], b: string[]): Array<[number, number]> {
             result.push([i, j]);
             i++;
             j++;
-        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        } else if (dp[(i + 1) * stride + j] >= dp[i * stride + (j + 1)]) {
             i++;
         } else {
             j++;
