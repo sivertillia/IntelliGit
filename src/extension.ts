@@ -4,16 +4,26 @@
 
 import * as vscode from "vscode";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { GitExecutor } from "./git/executor";
 import { GitOps, UpstreamPushDeclinedError } from "./git/operations";
 import { CommitGraphViewProvider } from "./views/CommitGraphViewProvider";
 import { CommitInfoViewProvider } from "./views/CommitInfoViewProvider";
 import { CommitPanelViewProvider } from "./views/CommitPanelViewProvider";
+import { MergeConflictSessionPanel } from "./views/MergeConflictSessionPanel";
+import { MergeConflictsTreeProvider } from "./views/MergeConflictsTreeProvider";
 import type { Branch } from "./types";
 import type { CommitAction } from "./webviews/react/commitGraphTypes";
 import { getErrorMessage, isBranchNotFullyMergedError } from "./utils/errors";
 import { deleteFileWithFallback } from "./utils/fileOps";
+import {
+    containsConflictMarkers,
+    detectInstalledJetBrainsMergeToolCandidates,
+    detectInstalledJetBrainsMergeToolPath,
+    launchJetBrainsMergeTool,
+    resolveJetBrainsMergeBinaryPath,
+} from "./utils/jetbrainsMergeTool";
 import { runWithNotificationProgress } from "./utils/notifications";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -40,6 +50,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const commitGraph = new CommitGraphViewProvider(context.extensionUri, gitOps);
     const commitInfo = new CommitInfoViewProvider(context.extensionUri);
     const commitPanel = new CommitPanelViewProvider(context.extensionUri, gitOps);
+    const mergeConflicts = new MergeConflictsTreeProvider(gitOps, workspaceFolder.uri);
 
     // --- Register views ---
 
@@ -52,6 +63,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const badgeView = vscode.window.createTreeView("intelligit.fileCountBadge", {
         treeDataProvider: emptyTreeProvider,
     });
+    const mergeConflictsView = vscode.window.createTreeView("intelligit.mergeConflicts", {
+        treeDataProvider: mergeConflicts,
+    });
 
     const updateBadge = (count: number) => {
         badgeView.badge =
@@ -59,9 +73,463 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 ? { tooltip: `${count} changed file${count !== 1 ? "s" : ""}`, value: count }
                 : undefined;
     };
+    const updateConflictCount = (count: number) => {
+        mergeConflictsView.description = count > 0 ? `${count}` : "";
+        vscode.commands.executeCommand("setContext", "intelligit.hasMergeConflicts", count > 0);
+    };
+    const refreshMergeConflicts = async () => {
+        updateConflictCount(await mergeConflicts.refresh());
+    };
+    const refreshConflictUi = async () => {
+        await commitPanel.refresh();
+        await refreshMergeConflicts();
+    };
+
+    const getIntelliGitConfig = (): vscode.WorkspaceConfiguration | null => {
+        const getConfiguration = vscode.workspace.getConfiguration;
+        if (typeof getConfiguration !== "function") return null;
+        return getConfiguration.call(vscode.workspace, "intelligit");
+    };
+
+    const getJetBrainsMergeToolPath = (): string => {
+        return getIntelliGitConfig()?.get<string>("jetbrainsMergeTool.path", "").trim() ?? "";
+    };
+
+    const getDefaultJetBrainsMergeToolPath = (): string => {
+        switch (process.platform) {
+            case "darwin":
+                return "/Applications/PyCharm.app";
+            case "win32":
+                return "C:\\Program Files\\JetBrains\\PyCharm\\bin\\pycharm64.exe";
+            default:
+                return "pycharm";
+        }
+    };
+
+    const saveJetBrainsMergeToolPath = async (rawPath: string): Promise<string | null> => {
+        const trimmed = rawPath.trim();
+        if (!trimmed) return null;
+
+        if (path.isAbsolute(trimmed) && !fs.existsSync(trimmed)) {
+            vscode.window.showErrorMessage(`JetBrains path not found: ${trimmed}`);
+            return null;
+        }
+
+        let resolvedBinaryPath: string;
+        try {
+            resolvedBinaryPath = await resolveJetBrainsMergeBinaryPath(trimmed);
+        } catch (err) {
+            const msg = getErrorMessage(err);
+            vscode.window.showErrorMessage(`Invalid JetBrains merge tool path: ${msg}`);
+            return null;
+        }
+
+        const config = getIntelliGitConfig();
+        if (config && typeof config.update === "function") {
+            await config.update("jetbrainsMergeTool.path", trimmed, vscode.ConfigurationTarget.Global);
+        }
+
+        const resolutionText =
+            resolvedBinaryPath === trimmed
+                ? `Executable: ${resolvedBinaryPath}`
+                : `Resolved executable: ${resolvedBinaryPath}`;
+        vscode.window.showInformationMessage(`Saved JetBrains merge tool path. ${resolutionText}`);
+        return trimmed;
+    };
+
+    const promptForJetBrainsMergeToolPath = async (): Promise<string | null> => {
+        const existing = getJetBrainsMergeToolPath();
+        const detected = existing ? null : await detectInstalledJetBrainsMergeToolPath();
+        const suggested = existing || detected || getDefaultJetBrainsMergeToolPath();
+        const input = await vscode.window.showInputBox({
+            title: "JetBrains Merge Tool Path",
+            prompt: "Enter a JetBrains IDE binary path/command (pycharm, idea, webstorm) or a macOS .app bundle path.",
+            placeHolder: suggested,
+            value: suggested,
+            ignoreFocusOut: true,
+        });
+        if (!input) return null;
+
+        return saveJetBrainsMergeToolPath(input);
+    };
+
+    const detectAndPickJetBrainsMergeToolPath = async (): Promise<string | null> => {
+        const candidates = await detectInstalledJetBrainsMergeToolCandidates();
+        if (candidates.length === 0) {
+            vscode.window.showWarningMessage(
+                "No JetBrains IDE installations were auto-detected. Enter the path manually instead.",
+            );
+            return promptForJetBrainsMergeToolPath();
+        }
+
+        const quickPickItems = await Promise.all(
+            candidates.slice(0, 50).map(async (candidatePath) => {
+                let detail: string | undefined;
+                try {
+                    const resolved = await resolveJetBrainsMergeBinaryPath(candidatePath);
+                    detail = resolved === candidatePath ? undefined : `Resolved: ${resolved}`;
+                } catch {
+                    detail = undefined;
+                }
+                return {
+                    label: path.basename(candidatePath),
+                    description: candidatePath,
+                    detail,
+                    candidatePath,
+                };
+            }),
+        );
+
+        quickPickItems.push({
+            label: "$(edit) Enter path manually",
+            description: "Open the path prompt",
+            detail: undefined,
+            candidatePath: "__manual__",
+        });
+
+        const picked = await vscode.window.showQuickPick(quickPickItems, {
+            title: "Detect JetBrains Merge Tool",
+            placeHolder: "Select a detected JetBrains IDE to use as the merge tool",
+            ignoreFocusOut: true,
+            matchOnDescription: true,
+            matchOnDetail: true,
+        });
+        if (!picked) return null;
+        if (picked.candidatePath === "__manual__") {
+            return promptForJetBrainsMergeToolPath();
+        }
+        return saveJetBrainsMergeToolPath(picked.candidatePath);
+    };
+
+    const openBuiltInMergeEditorForFile = async (filePath: string): Promise<void> => {
+        const fileUri = vscode.Uri.file(path.join(repoRoot, filePath));
+        try {
+            await vscode.commands.executeCommand("git.openMergeEditor", fileUri);
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showWarningMessage(
+                `VS Code merge editor command failed (${message}). Opening the file instead.`,
+            );
+            await vscode.commands.executeCommand("vscode.open", fileUri);
+        }
+    };
+
+    const sleep = (ms: number): Promise<void> =>
+        new Promise((resolve) => {
+            setTimeout(resolve, ms);
+        });
+
+    const readMergedFileWithRetry = async (
+        outputFileFsPath: string,
+        beforeMergeText: string | null,
+    ): Promise<string> => {
+        let lastReadError: unknown;
+        const delaysMs = [0, 80, 160, 320, 500];
+
+        for (let attempt = 0; attempt < delaysMs.length; attempt++) {
+            if (delaysMs[attempt] > 0) {
+                await sleep(delaysMs[attempt]);
+            }
+
+            try {
+                const text = await fs.promises.readFile(outputFileFsPath, "utf8");
+                const unchanged = beforeMergeText !== null && text === beforeMergeText;
+                const hasConflictBlock = containsConflictMarkers(text);
+                if ((unchanged || hasConflictBlock) && attempt < delaysMs.length - 1) {
+                    continue;
+                }
+                return text;
+            } catch (readErr) {
+                lastReadError = readErr;
+                if (attempt === delaysMs.length - 1) throw readErr;
+            }
+        }
+
+        throw (lastReadError instanceof Error
+            ? lastReadError
+            : new Error("Failed to read merged file after external merge tool closed."));
+    };
+
+    const openJetBrainsMergeToolForFile = async (filePath: string): Promise<boolean> => {
+        let jetBrainsPath = getJetBrainsMergeToolPath();
+        if (!jetBrainsPath) {
+            const action = await vscode.window.showInformationMessage(
+                "JetBrains merge tool path is not configured.",
+                "Configure",
+                "Open VS Code Merge Editor",
+            );
+            if (action === "Open VS Code Merge Editor") {
+                await openBuiltInMergeEditorForFile(filePath);
+                return true;
+            }
+            if (action !== "Configure") return false;
+            const configured = await promptForJetBrainsMergeToolPath();
+            if (!configured) return false;
+            jetBrainsPath = configured;
+        }
+
+        try {
+            const versions = await gitOps.getConflictFileVersions(filePath);
+            const outputFileFsPath = path.join(repoRoot, filePath);
+            const beforeMergeText = await fs.promises.readFile(outputFileFsPath, "utf8").catch(() => null);
+
+            await runWithNotificationProgress(
+                `Opening JetBrains merge tool for ${filePath}...`,
+                async () => {
+                    await launchJetBrainsMergeTool({
+                        binaryPath: jetBrainsPath,
+                        repoRootFsPath: repoRoot,
+                        relativeFilePath: filePath,
+                        outputFileFsPath,
+                        baseContent: versions.base,
+                        oursContent: versions.ours,
+                        theirsContent: versions.theirs,
+                    });
+                },
+            );
+
+            try {
+                const mergedText = await readMergedFileWithRetry(outputFileFsPath, beforeMergeText);
+                if (!containsConflictMarkers(mergedText)) {
+                    await gitOps.stageFile(filePath);
+                    vscode.window.showInformationMessage(`Merged and staged: ${filePath}`);
+                } else {
+                    vscode.window.showInformationMessage(
+                        `Merge tool closed, but conflict markers remain in ${filePath}`,
+                    );
+                }
+            } catch (readErr) {
+                const msg = getErrorMessage(readErr);
+                vscode.window.showWarningMessage(
+                    `Could not inspect merged file '${filePath}' after JetBrains merge: ${msg}`,
+                );
+            }
+
+            await refreshConflictUi();
+            return true;
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showErrorMessage(`JetBrains merge tool failed: ${message}`);
+            return false;
+        }
+    };
+
+    const openMergeConflictForFile = async (filePath: string): Promise<void> => {
+        const preferExternal =
+            getIntelliGitConfig()?.get<boolean>("jetbrainsMergeTool.preferExternal", true) ?? true;
+
+        if (preferExternal && getJetBrainsMergeToolPath()) {
+            const opened = await openJetBrainsMergeToolForFile(filePath);
+            if (opened) return;
+        }
+        await openBuiltInMergeEditorForFile(filePath);
+    };
+
+    const openConflictSession = async (labels?: {
+        sourceBranch?: string;
+        targetBranch?: string;
+    }): Promise<void> => {
+        await MergeConflictSessionPanel.open(context.extensionUri, gitOps, labels ?? {}, {
+            onOpenMergeConflict: async (filePath) => {
+                await openMergeConflictForFile(filePath);
+            },
+            onConflictStateChanged: async () => {
+                await refreshConflictUi();
+            },
+        });
+    };
+
+    const normalizeGitPath = (fsPathValue: string): string => fsPathValue.split(path.sep).join("/");
+
+    const getRepoRelativeFilePathFromUri = (uri: vscode.Uri): string | null => {
+        if (uri.scheme !== "file") return null;
+        const relative = path.relative(repoRoot, uri.fsPath);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+        return normalizeGitPath(relative);
+    };
+
+    const getEditorContextFileUri = (ctx?: unknown): vscode.Uri | null => {
+        if (ctx instanceof vscode.Uri) return ctx;
+        const activeUri = vscode.window.activeTextEditor?.document.uri;
+        return activeUri?.scheme === "file" ? activeUri : null;
+    };
+
+    type CommitInfoFileContext = {
+        filePath: string;
+        commitHash: string;
+        commitShortHash?: string;
+    };
+
+    const getCommitInfoFileContext = (value: unknown): CommitInfoFileContext | null => {
+        if (!value || typeof value !== "object") return null;
+        const maybe = value as {
+            filePath?: unknown;
+            commitHash?: unknown;
+            commitShortHash?: unknown;
+        };
+        if (typeof maybe.filePath !== "string" || typeof maybe.commitHash !== "string") return null;
+        const filePath = maybe.filePath.trim();
+        const commitHash = maybe.commitHash.trim();
+        const commitShortHash =
+            typeof maybe.commitShortHash === "string" ? maybe.commitShortHash.trim() : undefined;
+        if (!filePath || !commitHash) return null;
+        return { filePath, commitHash, commitShortHash };
+    };
+
+    const closeTemporaryDiffSourceTab = async (uri: vscode.Uri): Promise<void> => {
+        const matchingTab = vscode.window.tabGroups.all
+            .flatMap((group) => group.tabs)
+            .find((tab) => {
+                const input = tab.input;
+                return input instanceof vscode.TabInputText && input.uri.toString() === uri.toString();
+            });
+        if (!matchingTab) return;
+        try {
+            await vscode.window.tabGroups.close(matchingTab, true);
+        } catch {
+            // Best-effort cleanup only; diff view is already open.
+        }
+    };
+
+    const openDiffAgainstGitRef = async (
+        fileUri: vscode.Uri,
+        repoRelativeFilePath: string,
+        ref: string,
+        sourceLabel: "revision" | "branch",
+    ): Promise<void> => {
+        const trimmedRef = ref.trim();
+        if (!trimmedRef) return;
+
+        const currentDoc = await vscode.workspace.openTextDocument(fileUri);
+        const refContent = await gitOps.getFileContentAtRef(repoRelativeFilePath, trimmedRef);
+        const leftDoc = await vscode.workspace.openTextDocument({
+            content: refContent,
+            language: currentDoc.languageId,
+        });
+        const title = `${repoRelativeFilePath} (${sourceLabel}: ${trimmedRef}) <-> Working Tree`;
+        await vscode.commands.executeCommand("vscode.diff", leftDoc.uri, fileUri, title);
+        await closeTemporaryDiffSourceTab(leftDoc.uri);
+    };
+
+    const compareEditorFileWithBranch = async (ctx?: unknown): Promise<void> => {
+        const fileUri = getEditorContextFileUri(ctx);
+        if (!fileUri) {
+            vscode.window.showErrorMessage(
+                "Compare with Branch is only available for local files.",
+            );
+            return;
+        }
+
+        const repoRelativeFilePath = getRepoRelativeFilePathFromUri(fileUri);
+        if (!repoRelativeFilePath) {
+            vscode.window.showErrorMessage(
+                "Selected file is outside the current IntelliGit repository workspace.",
+            );
+            return;
+        }
+
+        try {
+            const branches = await gitOps.getBranches();
+            const picks = branches
+                .slice()
+                .sort((a, b) => {
+                    if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
+                    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+                    return a.name.localeCompare(b.name);
+                })
+                .map((branch) => ({
+                    label: branch.isCurrent ? `${branch.name} (current)` : branch.name,
+                    description: branch.isRemote ? "remote branch" : "local branch",
+                    detail: branch.hash,
+                    refName: branch.name,
+                }));
+
+            const picked = await vscode.window.showQuickPick(picks, {
+                title: "Compare with Branch",
+                placeHolder: `Select a branch for ${repoRelativeFilePath}`,
+                ignoreFocusOut: true,
+                matchOnDescription: true,
+                matchOnDetail: true,
+            });
+            if (!picked) return;
+
+            await openDiffAgainstGitRef(fileUri, repoRelativeFilePath, picked.refName, "branch");
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showErrorMessage(`Compare with branch failed: ${message}`);
+        }
+    };
+
+    const compareEditorFileWithRevision = async (ctx?: unknown): Promise<void> => {
+        const fileUri = getEditorContextFileUri(ctx);
+        if (!fileUri) {
+            vscode.window.showErrorMessage(
+                "Compare with Revision is only available for local files.",
+            );
+            return;
+        }
+
+        const repoRelativeFilePath = getRepoRelativeFilePathFromUri(fileUri);
+        if (!repoRelativeFilePath) {
+            vscode.window.showErrorMessage(
+                "Selected file is outside the current IntelliGit repository workspace.",
+            );
+            return;
+        }
+
+        try {
+            const historyEntries = await gitOps.getFileHistoryEntries(repoRelativeFilePath, 20);
+            const historyPicks = historyEntries.map((entry) => ({
+                label: `${entry.shortHash}  ${entry.subject || "(no subject)"}`,
+                description: entry.author,
+                detail: entry.date,
+                refName: entry.hash,
+            }));
+            const manualSentinel = "__manual__";
+            const picks = [
+                ...historyPicks,
+                {
+                    label: "$(edit) Enter revision manually",
+                    description: "Commit hash, tag, or ref name",
+                    detail: undefined,
+                    refName: manualSentinel,
+                },
+            ];
+
+            const picked = await vscode.window.showQuickPick(picks, {
+                title: "Compare with Revision",
+                placeHolder:
+                    historyPicks.length > 0
+                        ? `Select a recent revision for ${repoRelativeFilePath}`
+                        : `No recent file history found. Enter a revision for ${repoRelativeFilePath}`,
+                ignoreFocusOut: true,
+                matchOnDescription: true,
+                matchOnDetail: true,
+            });
+            if (!picked) return;
+
+            let refName = picked.refName;
+            if (refName === manualSentinel) {
+                const input = await vscode.window.showInputBox({
+                    title: "Compare with Revision",
+                    prompt: `Enter a commit hash, tag, or ref for ${repoRelativeFilePath}`,
+                    placeHolder: "HEAD~1",
+                    ignoreFocusOut: true,
+                });
+                if (!input?.trim()) return;
+                refName = input.trim();
+            }
+
+            await openDiffAgainstGitRef(fileUri, repoRelativeFilePath, refName, "revision");
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showErrorMessage(`Compare with revision failed: ${message}`);
+        }
+    };
 
     context.subscriptions.push(
         badgeView,
+        mergeConflictsView,
         commitPanel.onDidChangeFileCount(updateBadge),
         vscode.window.registerWebviewViewProvider(CommitGraphViewProvider.viewType, commitGraph),
         vscode.window.registerWebviewViewProvider(CommitInfoViewProvider.viewType, commitInfo),
@@ -355,6 +823,128 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand("intelligit.refresh");
     };
 
+    const EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+    const buildCommitFilePatch = async (
+        commitHash: string,
+        filePath: string,
+        actionLabel: string,
+    ): Promise<string | null> => {
+        const parents = await getCommitParentHashes(commitHash);
+        if (parents.length > 1) {
+            const mainlineParent = await pickMainlineParent(commitHash, actionLabel);
+            if (mainlineParent.kind === "cancelled") return null;
+            if (mainlineParent.kind === "notMerge") return null;
+            return executor.run([
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                `${commitHash}^${mainlineParent.parentNumber}`,
+                commitHash,
+                "--",
+                filePath,
+            ]);
+        }
+
+        const baseRef = parents.length === 0 ? EMPTY_TREE_HASH : parents[0];
+        return executor.run([
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            baseRef,
+            commitHash,
+            "--",
+            filePath,
+        ]);
+    };
+
+    const applyPatchTextToRepo = async (patchText: string, reverse: boolean): Promise<void> => {
+        const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "intelligit-filepatch-"));
+        const patchFilePath = path.join(tempDir, "selected-change.patch");
+        try {
+            await fs.promises.writeFile(patchFilePath, patchText, "utf8");
+            const args = [
+                "apply",
+                "--index",
+                "--3way",
+                "--whitespace=nowarn",
+                ...(reverse ? ["-R"] : []),
+                patchFilePath,
+            ];
+            await executor.run(args);
+        } finally {
+            await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        }
+    };
+
+    const compareCommitInfoFileWithLocal = async (ctx: unknown): Promise<void> => {
+        const fileCtx = getCommitInfoFileContext(ctx);
+        if (!fileCtx) return;
+        try {
+            const fileUri = vscode.Uri.file(path.join(repoRoot, fileCtx.filePath));
+            await openDiffAgainstGitRef(fileUri, fileCtx.filePath, fileCtx.commitHash, "revision");
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showErrorMessage(`Compare with local failed: ${message}`);
+        }
+    };
+
+    const applySelectedCommitFileChange = async (
+        ctx: unknown,
+        mode: "cherry-pick" | "revert",
+    ): Promise<void> => {
+        const fileCtx = getCommitInfoFileContext(ctx);
+        if (!fileCtx) return;
+
+        const short = fileCtx.commitShortHash || fileCtx.commitHash.slice(0, 8);
+        const actionTitle =
+            mode === "cherry-pick" ? "Cherry-pick Selected Change" : "Revert Selected Change";
+        const confirmLabel = mode === "cherry-pick" ? "Apply Change" : "Revert Change";
+        const confirmMessage =
+            mode === "cherry-pick"
+                ? `Apply the change from ${short} for ${fileCtx.filePath} to your working tree and stage it?`
+                : `Apply the inverse of the change from ${short} for ${fileCtx.filePath} to your working tree and stage it?`;
+        const confirmed = await vscode.window.showWarningMessage(
+            confirmMessage,
+            { modal: true },
+            confirmLabel,
+        );
+        if (confirmed !== confirmLabel) return;
+
+        try {
+            const patchText = await buildCommitFilePatch(fileCtx.commitHash, fileCtx.filePath, actionTitle);
+            if (patchText === null) return; // merge parent selection cancelled
+            if (!patchText.trim()) {
+                vscode.window.showInformationMessage(
+                    `No file-level patch found for ${fileCtx.filePath} in ${short}.`,
+                );
+                return;
+            }
+
+            await runWithNotificationProgress(
+                `${mode === "cherry-pick" ? "Applying" : "Reverting"} selected change for ${fileCtx.filePath}...`,
+                async () => {
+                    await applyPatchTextToRepo(patchText, mode === "revert");
+                },
+            );
+
+            vscode.window.showInformationMessage(
+                `${
+                    mode === "cherry-pick" ? "Applied" : "Reverted"
+                } selected change from ${short} for ${fileCtx.filePath}.`,
+            );
+            await refreshConflictUi();
+        } catch (error) {
+            const message = getErrorMessage(error);
+            vscode.window.showErrorMessage(
+                `${mode === "cherry-pick" ? "Cherry-pick selected change" : "Revert selected change"} failed: ${message}`,
+            );
+            await refreshConflictUi().catch(() => {});
+        }
+    };
+
     const handleCommitContextAction = async (params: {
         action: CommitAction;
         hash: string;
@@ -627,6 +1217,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             commitGraph.setBranches(currentBranches);
             await commitGraph.refresh();
             await commitPanel.refresh();
+            await refreshMergeConflicts();
             await clearSelection();
         }),
 
@@ -640,6 +1231,84 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         vscode.commands.registerCommand("intelligit.showGitLog", async () => {
             await vscode.commands.executeCommand("intelligit.commitGraph.focus");
+        }),
+
+        vscode.commands.registerCommand("intelligit.mergeConflictsRefresh", async () => {
+            await refreshMergeConflicts();
+        }),
+    );
+
+    const isFilePathContext = (value: unknown): value is { filePath: string } => {
+        return !!value && typeof value === "object" && "filePath" in value && typeof value.filePath === "string";
+    };
+
+    const resolveConflictPath = (ctx: unknown): string | null =>
+        isFilePathContext(ctx) ? ctx.filePath : null;
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("intelligit.openMergeConflict", async (ctx: unknown) => {
+            const filePath = resolveConflictPath(ctx);
+            if (!filePath) return;
+            await openMergeConflictForFile(filePath);
+        }),
+        vscode.commands.registerCommand("intelligit.compareWithRevision", async (ctx?: unknown) => {
+            await compareEditorFileWithRevision(ctx);
+        }),
+        vscode.commands.registerCommand("intelligit.compareWithBranch", async (ctx?: unknown) => {
+            await compareEditorFileWithBranch(ctx);
+        }),
+        vscode.commands.registerCommand("intelligit.openConflictSession", async () => {
+            const conflicts = await gitOps.getConflictFilesDetailed();
+            if (conflicts.length === 0) {
+                vscode.window.showInformationMessage("No unresolved merge conflicts found.");
+                return;
+            }
+            await openConflictSession();
+        }),
+        vscode.commands.registerCommand("intelligit.detectJetBrainsMergeTool", async () => {
+            await detectAndPickJetBrainsMergeToolPath();
+        }),
+        vscode.commands.registerCommand(
+            "intelligit.openMergeConflictInJetBrains",
+            async (ctx: unknown) => {
+                const filePath = resolveConflictPath(ctx);
+                if (!filePath) return;
+                await openJetBrainsMergeToolForFile(filePath);
+            },
+        ),
+        vscode.commands.registerCommand("intelligit.conflictAcceptYours", async (ctx: unknown) => {
+            const filePath = resolveConflictPath(ctx);
+            if (!filePath) return;
+            try {
+                await runWithNotificationProgress(
+                    `Accepting yours for ${filePath}...`,
+                    async () => {
+                        await gitOps.acceptConflictSide(filePath, "ours");
+                    },
+                );
+                vscode.window.showInformationMessage(`Accepted yours for ${filePath}`);
+                await refreshConflictUi();
+            } catch (error) {
+                const message = getErrorMessage(error);
+                vscode.window.showErrorMessage(`Accept yours failed: ${message}`);
+            }
+        }),
+        vscode.commands.registerCommand("intelligit.conflictAcceptTheirs", async (ctx: unknown) => {
+            const filePath = resolveConflictPath(ctx);
+            if (!filePath) return;
+            try {
+                await runWithNotificationProgress(
+                    `Accepting theirs for ${filePath}...`,
+                    async () => {
+                        await gitOps.acceptConflictSide(filePath, "theirs");
+                    },
+                );
+                vscode.window.showInformationMessage(`Accepted theirs for ${filePath}`);
+                await refreshConflictUi();
+            } catch (error) {
+                const message = getErrorMessage(error);
+                vscode.window.showErrorMessage(`Accept theirs failed: ${message}`);
+            }
         }),
     );
 
@@ -750,6 +1419,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     vscode.window.showInformationMessage(`Merged ${name}`);
                     await vscode.commands.executeCommand("intelligit.refresh");
                 } catch (err) {
+                    try {
+                        const conflicts = await gitOps.getConflictFilesDetailed();
+                        if (conflicts.length > 0) {
+                            await openConflictSession({
+                                sourceBranch: name,
+                                targetBranch: getCurrentBranchName() || undefined,
+                            });
+                            await refreshConflictUi();
+                            vscode.window.showWarningMessage(
+                                `Merge produced ${conflicts.length} unresolved conflict file${conflicts.length === 1 ? "" : "s"}. Opened Conflicts session.`,
+                            );
+                            return;
+                        }
+                    } catch {
+                        // Fall back to merge error if conflict inspection/session launch fails.
+                    }
                     const msg = getErrorMessage(err);
                     vscode.window.showErrorMessage(`Merge failed: ${msg}`);
                 }
@@ -958,6 +1643,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // --- Commit panel file context menu commands ---
 
     context.subscriptions.push(
+        vscode.commands.registerCommand("intelligit.commitFileCompareWithLocal", async (ctx: unknown) => {
+            await compareCommitInfoFileWithLocal(ctx);
+        }),
+        vscode.commands.registerCommand("intelligit.commitFileCherryPickChange", async (ctx: unknown) => {
+            await applySelectedCommitFileChange(ctx, "cherry-pick");
+        }),
+        vscode.commands.registerCommand("intelligit.commitFileRevertChange", async (ctx: unknown) => {
+            await applySelectedCommitFileChange(ctx, "revert");
+        }),
         vscode.commands.registerCommand(
             "intelligit.fileRollback",
             async (ctx: { filePath?: string }) => {
@@ -1063,6 +1757,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     commitPanel.refresh().catch((err) => {
         console.error("Initial commit panel refresh failed:", err);
     });
+    refreshMergeConflicts().catch((err) => {
+        console.error("Initial merge conflicts refresh failed:", err);
+    });
 
     // --- Auto-refresh on file changes ---
 
@@ -1092,6 +1789,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             commitGraph.setBranches(currentBranches);
             await commitGraph.refresh();
             await commitPanel.refresh();
+            await refreshMergeConflicts();
         }, 500);
     };
 
@@ -1131,7 +1829,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // --- Disposables ---
 
-    context.subscriptions.push(commitGraph, commitInfo, commitPanel);
+    context.subscriptions.push(commitGraph, commitInfo, commitPanel, mergeConflicts);
 }
 
 export function deactivate(): void {}

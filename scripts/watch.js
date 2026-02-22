@@ -3,6 +3,7 @@
 
 const esbuild = require("esbuild");
 const path = require("path");
+const { WEBVIEW_CONFIGS } = require("./webviewConfigs");
 
 async function watch() {
     const extensionCtx = await esbuild.context({
@@ -19,43 +20,23 @@ async function watch() {
     await extensionCtx.watch();
     console.log("Watching extension...");
 
-    const webviewCtx = await esbuild.context({
-        entryPoints: [path.resolve(__dirname, "../src/webviews/react/CommitGraphApp.tsx")],
-        bundle: true,
-        outfile: path.resolve(__dirname, "../dist/webview-commitgraph.js"),
-        format: "esm",
-        platform: "browser",
-        target: "es2022",
-        sourcemap: true,
-    });
-    await webviewCtx.watch();
-    console.log("Watching webview: commitgraph");
-
-    const commitPanelCtx = await esbuild.context({
-        entryPoints: [
-            path.resolve(__dirname, "../src/webviews/react/commit-panel/CommitPanelApp.tsx"),
-        ],
-        bundle: true,
-        outfile: path.resolve(__dirname, "../dist/webview-commitpanel.js"),
-        format: "esm",
-        platform: "browser",
-        target: "es2022",
-        sourcemap: true,
-    });
-    await commitPanelCtx.watch();
-    console.log("Watching webview: commitpanel");
-
-    const commitInfoCtx = await esbuild.context({
-        entryPoints: [path.resolve(__dirname, "../src/webviews/react/CommitInfoApp.tsx")],
-        bundle: true,
-        outfile: path.resolve(__dirname, "../dist/webview-commitinfo.js"),
-        format: "esm",
-        platform: "browser",
-        target: "es2022",
-        sourcemap: true,
-    });
-    await commitInfoCtx.watch();
-    console.log("Watching webview: commitinfo");
+    for (const webview of WEBVIEW_CONFIGS.map(({ entry, out }) => ({
+        name: out.replace(/^webview-/, ""),
+        entry: `../src/webviews/${entry}.tsx`,
+        out: `../dist/${out}.js`,
+    }))) {
+        const ctx = await esbuild.context({
+            entryPoints: [path.resolve(__dirname, webview.entry)],
+            bundle: true,
+            outfile: path.resolve(__dirname, webview.out),
+            format: "esm",
+            platform: "browser",
+            target: "es2022",
+            sourcemap: true,
+        });
+        await ctx.watch();
+        console.log(`Watching webview: ${webview.name}`);
+    }
 }
 
 watch().catch((err) => {

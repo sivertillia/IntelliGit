@@ -12,4 +12,14 @@ export default defineConfig([
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
+  {
+    files: ["scripts/**/*.js"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: globals.node,
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ]);

@@ -1,5 +1,13 @@
 import { GitExecutor } from "./executor";
-import type { Branch, Commit, CommitDetail, CommitFile, WorkingFile, StashEntry } from "../types";
+import type {
+    Branch,
+    Commit,
+    CommitDetail,
+    CommitFile,
+    WorkingFile,
+    StashEntry,
+    MergeConflictFile,
+} from "../types";
 
 declare const require: (id: string) => unknown;
 
@@ -646,6 +654,132 @@ export class GitOps {
         ]);
     }
 
+    async getFileHistoryEntries(
+        filePath: string,
+        maxCount: number = 30,
+    ): Promise<
+        Array<{ hash: string; shortHash: string; author: string; date: string; subject: string }>
+    > {
+        const raw = await this.executor.run([
+            "log",
+            `--max-count=${maxCount}`,
+            "--pretty=format:%H%x09%h%x09%an%x09%aI%x09%s",
+            "--follow",
+            "--",
+            filePath,
+        ]);
+
+        return raw
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+                const [hash = "", shortHash = "", author = "", date = "", ...subjectParts] =
+                    line.split("\t");
+                return {
+                    hash,
+                    shortHash,
+                    author,
+                    date,
+                    subject: subjectParts.join("\t"),
+                };
+            })
+            .filter((entry) => entry.hash && entry.shortHash);
+    }
+
+    async getFileContentAtRef(filePath: string, ref: string): Promise<string> {
+        const trimmedRef = ref.trim();
+        const trimmedFilePath = filePath.trim();
+        if (!trimmedRef) throw new Error("Git ref is empty.");
+        if (!trimmedFilePath) throw new Error("File path is empty.");
+        if (trimmedRef.startsWith("-")) {
+            throw new Error("Git ref must not start with '-'.");
+        }
+        if (trimmedFilePath.startsWith("-")) {
+            throw new Error("File path must not start with '-'.");
+        }
+        if (/[\0\r\n]/.test(trimmedRef)) {
+            throw new Error("Git ref contains invalid control characters.");
+        }
+        if (/[\0\r\n]/.test(trimmedFilePath)) {
+            throw new Error("File path contains invalid control characters.");
+        }
+        return this.executor.run(["show", `${trimmedRef}:${trimmedFilePath}`]);
+    }
+
+    async getConflictedFiles(): Promise<string[]> {
+        const out = await this.executor.run(["diff", "--name-only", "--diff-filter=U"]);
+        return out
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    async getConflictFilesDetailed(): Promise<MergeConflictFile[]> {
+        const result = await this.executor.run(["status", "--porcelain=v1", "-z", "-uall"]);
+        const files: MergeConflictFile[] = [];
+        const entries = result.split("\0");
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (!entry || entry.length < 4) continue;
+
+            const oursCode = entry.charAt(0);
+            const theirsCode = entry.charAt(1);
+            const code = `${oursCode}${theirsCode}`;
+            const path = entry.slice(3);
+            if (!path) continue;
+
+            const isRenameOrCopy =
+                oursCode === "R" || oursCode === "C" || theirsCode === "R" || theirsCode === "C";
+            if (isRenameOrCopy && i + 1 < entries.length) {
+                i += 1;
+            }
+
+            if (!isUnmergedConflictCode(code)) continue;
+            files.push({
+                path,
+                code,
+                ours: mapConflictSideState(oursCode),
+                theirs: mapConflictSideState(theirsCode),
+            });
+        }
+
+        return files.sort((a, b) => a.path.localeCompare(b.path));
+    }
+
+    async getConflictFileVersions(
+        filePath: string,
+    ): Promise<{ base: string; ours: string; theirs: string }> {
+        const withTimeout = <T>(promise: Promise<T>, label: string): Promise<T> => {
+            return Promise.race([
+                promise,
+                new Promise<never>((_, reject) =>
+                    setTimeout(
+                        () => reject(new Error(`Timed out reading ${label} for ${filePath}`)),
+                        10_000,
+                    ),
+                ),
+            ]);
+        };
+
+        const [base, ours, theirs] = await Promise.all([
+            withTimeout(this.executor.run(["show", `:1:${filePath}`]), "base").catch(() => ""),
+            withTimeout(this.executor.run(["show", `:2:${filePath}`]), "ours").catch(() => ""),
+            withTimeout(this.executor.run(["show", `:3:${filePath}`]), "theirs").catch(() => ""),
+        ]);
+        return { base, ours, theirs };
+    }
+
+    async stageFile(filePath: string): Promise<void> {
+        await this.executor.run(["add", "--", filePath]);
+    }
+
+    async acceptConflictSide(filePath: string, side: "ours" | "theirs"): Promise<void> {
+        const sideArg = side === "ours" ? "--ours" : "--theirs";
+        await this.executor.run(["checkout", sideArg, "--", filePath]);
+        await this.executor.run(["add", "--", filePath]);
+    }
+
     async deleteFile(filePath: string, force: boolean = false): Promise<void> {
         const args = force ? ["rm", "-f", "--", filePath] : ["rm", "--", filePath];
         await this.executor.run(args);
@@ -673,6 +807,18 @@ function mapStatusCode(code: string): WorkingFile["status"] | null {
         default:
             return "M";
     }
+}
+
+const UNMERGED_CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+function isUnmergedConflictCode(code: string): boolean {
+    return UNMERGED_CONFLICT_CODES.has(code);
+}
+
+function mapConflictSideState(code: string): MergeConflictFile["ours"] {
+    if (code === "A") return "Added";
+    if (code === "D") return "Deleted";
+    return "Modified";
 }
 
 function isNoUpstreamPushError(err: unknown): boolean {

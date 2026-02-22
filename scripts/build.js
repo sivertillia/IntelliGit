@@ -3,6 +3,7 @@
 
 const esbuild = require("esbuild");
 const path = require("path");
+const { WEBVIEW_CONFIGS } = require("./webviewConfigs");
 
 const extensionConfig = {
     entryPoints: [path.resolve(__dirname, "../src/extension.ts")],
@@ -18,11 +19,7 @@ const extensionConfig = {
     mainFields: ["module", "main"],
 };
 
-const webviewConfigs = [
-    { entry: "react/CommitGraphApp", out: "webview-commitgraph" },
-    { entry: "react/commit-panel/CommitPanelApp", out: "webview-commitpanel" },
-    { entry: "react/CommitInfoApp", out: "webview-commitinfo" },
-].map(({ entry, out }) => ({
+const webviewConfigs = WEBVIEW_CONFIGS.map(({ entry, out }) => ({
     entryPoints: [path.resolve(__dirname, `../src/webviews/${entry}.tsx`)],
     bundle: true,
     outfile: path.resolve(__dirname, `../dist/${out}.js`),

@@ -138,6 +138,8 @@ export function CommitInfoPane({
                     <TreeRows
                         entries={tree}
                         depth={0}
+                        commitHash={detail.hash}
+                        commitShortHash={detail.shortHash}
                         expandedDirs={expandedDirs}
                         folderIcon={folderIcon}
                         folderExpandedIcon={folderExpandedIcon}
@@ -301,6 +303,8 @@ export function CommitInfoPane({
 function TreeRows({
     entries,
     depth,
+    commitHash,
+    commitShortHash,
     expandedDirs,
     folderIcon,
     folderExpandedIcon,
@@ -309,6 +313,8 @@ function TreeRows({
 }: {
     entries: TreeEntry[];
     depth: number;
+    commitHash: string;
+    commitShortHash: string;
     expandedDirs: Set<string>;
     folderIcon?: ThemeTreeIcon;
     folderExpandedIcon?: ThemeTreeIcon;
@@ -319,7 +325,15 @@ function TreeRows({
         <>
             {entries.map((entry) => {
                 if (entry.type === "file") {
-                    return <CommitFileRow key={entry.file.path} file={entry.file} depth={depth} />;
+                    return (
+                        <CommitFileRow
+                            key={entry.file.path}
+                            file={entry.file}
+                            depth={depth}
+                            commitHash={commitHash}
+                            commitShortHash={commitShortHash}
+                        />
+                    );
                 }
                 const isExpanded = expandedDirs.has(entry.path);
                 const fileCount = countFiles(entry.children);
@@ -339,6 +353,8 @@ function TreeRows({
                             <TreeRows
                                 entries={entry.children}
                                 depth={depth + 1}
+                                commitHash={commitHash}
+                                commitShortHash={commitShortHash}
                                 expandedDirs={expandedDirs}
                                 folderIcon={folderIcon}
                                 folderExpandedIcon={folderExpandedIcon}
@@ -420,7 +436,17 @@ function CommitFolderRow({
     );
 }
 
-function CommitFileRow({ file, depth }: { file: CommitFile; depth: number }): React.ReactElement {
+function CommitFileRow({
+    file,
+    depth,
+    commitHash,
+    commitShortHash,
+}: {
+    file: CommitFile;
+    depth: number;
+    commitHash: string;
+    commitShortHash: string;
+}): React.ReactElement {
     const padLeft = INFO_INDENT_BASE + depth * INFO_INDENT_STEP;
     const fileName = getLeafName(file.path);
 
@@ -436,6 +462,13 @@ function CommitFileRow({ file, depth }: { file: CommitFile; depth: number }): Re
             cursor="default"
             position="relative"
             _hover={{ bg: "var(--vscode-list-hoverBackground)" }}
+            data-vscode-context={JSON.stringify({
+                webviewSection: "commitInfoFile",
+                filePath: file.path,
+                commitHash,
+                commitShortHash,
+                preventDefaultContextMenuItems: true,
+            })}
             title={file.path}
         >
             <InfoIndentGuides treeDepth={depth} />
