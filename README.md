@@ -88,6 +88,34 @@ Why this helps:
 4. Open the bottom IntelliGit panel to inspect graph history, filter by branch, and review commit details.
 5. Use branch or commit context menus for advanced operations.
 
+## JetBrains Merge Tool Setup (Optional)
+
+IntelliGit can open merge conflicts in a JetBrains IDE merge tool (PyCharm, IntelliJ IDEA, WebStorm, etc.).
+
+1. Open VS Code Settings and search for `IntelliGit: JetBrains Merge Tool Path`.
+2. Set `intelligit.jetbrainsMergeTool.path` to your JetBrains app path.
+3. On macOS, you can paste the `.app` path directly (IntelliGit auto-resolves the internal executable).
+4. Keep `intelligit.jetbrainsMergeTool.preferExternal` enabled (default) if you want IntelliGit to use JetBrains first.
+
+Examples (macOS):
+
+- `/Applications/PyCharm.app`
+- `/Applications/IntelliJ IDEA.app`
+- `/Applications/WebStorm.app`
+- `/Users/<your-user>/Applications/PyCharm.app`
+
+Examples (Windows):
+
+- `C:\\Program Files\\JetBrains\\PyCharm 2025.1\\bin\\pycharm64.exe`
+- `C:\\Program Files\\JetBrains\\IntelliJ IDEA 2025.1\\bin\\idea64.exe`
+- `C:\\Program Files\\JetBrains\\WebStorm 2025.1\\bin\\webstorm64.exe`
+
+Helpful command:
+
+- Run `IntelliGit: Detect JetBrains Merge Tool` from the Command Palette to auto-detect installed JetBrains IDEs and save the path.
+
+If no JetBrains IDE path is configured, IntelliGit falls back to the VS Code internal merge editor.
+
 ## Keyboard Shortcut
 
 | Key | Command |
