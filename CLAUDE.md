@@ -699,6 +699,92 @@ This includes:
 
 Remember: **Claude Flow CLI coordinates, Claude Code Task tool creates!**
 
+---
+
+## Vexp: Local-First Context Engine (Code Understanding Layer)
+
+Vexp is a local-first context engine that builds a live dependency graph of the codebase using tree-sitter parsing. It runs entirely on-machine (zero network calls) and serves only relevant code to AI agents via MCP, achieving 65-70% token reduction.
+
+**Vexp complements claude-flow:** claude-flow orchestrates agents, Vexp feeds them precise code context.
+
+### Setup
+
+Vexp is installed as a VS Code extension (`Vexp.vexp-vscode` v1.2.9) and registered as an MCP server:
+```bash
+# Already configured — HTTP MCP server on local scope
+claude mcp add --transport http -s local vexp http://127.0.0.1:7821/mcp
+```
+
+**Prerequisite:** The Vexp extension must be active in VS Code for the daemon to run. The daemon auto-starts on workspace open and indexes automatically.
+
+### Local Data
+
+- `.vexp/index.db` — dependency graph (SQLite, never uploaded)
+- `.vexp/daemon.sock` — Unix socket for local communication
+- `.vexp/vexp.log` — daemon log
+
+### Codebase Index (this project)
+
+- 102 files, 661 nodes, 1,018 edges
+- 512 callable nodes, 395 CALL edges
+- 261 change-coupling edges from 97 git commits
+- 658 TF-IDF vectors for semantic search
+- Indexed in ~1 second
+
+### MCP Tools (10 total)
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `get_context_capsule` | Primary query — returns pivot nodes with full source, adjacents as signatures only | Before any code edit or investigation |
+| `get_impact_graph` | Shows all callers and dependents of a symbol | Before refactoring or modifying shared code |
+| `search_logic_flow` | Traces execution paths between functions across files | Debugging, understanding call chains |
+| `get_skeleton` | Returns token-efficient code structure (signatures + docstrings) | When you need an overview without full source |
+| `get_session_context` | Retrieves observations saved in prior sessions | Start of session to restore context |
+| `search_memory` | Searches persistent session memory | Finding past observations about the codebase |
+| `save_observation` | Persists an insight for future sessions (stale-flagged on code change) | After discovering important patterns or decisions |
+| `submit_lsp_edges` | Feeds VS Code language server type info into the graph | Automatic via extension |
+| `workspace_setup` | Configures multi-repo workspace | When adding additional repos |
+| `index_status` | Returns current indexing state (nodes, edges, files) | Verify index health |
+
+**Free tier (Starter):** 2,000 nodes, 1 repo, 6 tools. **Pro ($19/mo):** 50,000 nodes, 3 repos, all 10 tools.
+
+### Usage Rules
+
+**ALWAYS use Vexp tools BEFORE reading files directly when:**
+- Investigating a bug (use `get_context_capsule` with the bug description)
+- Understanding blast radius of a change (use `get_impact_graph`)
+- Tracing how a feature works across files (use `search_logic_flow`)
+- Getting an overview of a module (use `get_skeleton`)
+
+**SKIP Vexp for:**
+- Reading a single known file (use Read tool directly)
+- Simple grep/search for a string (use Grep tool directly)
+- File listing/glob operations
+
+### Intent Detection
+
+Vexp auto-detects query intent and adjusts results:
+- "fix bug" / "debug" → debug mode (error paths, recent changes)
+- "refactor" / "change" → blast-radius mode (callers, dependents)
+- "add feature" / "implement" → context mode (related code, patterns)
+- "understand" / "explain" → overview mode (skeletons, flow traces)
+
+### Integration with claude-flow
+
+```
+claude-flow (orchestration)          Vexp (context)
+────────────────────────────         ──────────────────────────
+Route task → right agent type        Parse codebase → AST graph
+Spawn agent swarm                    Serve minimal context capsule
+Coordinate agent consensus    ◄───►  Each agent gets precise context
+Persist learnings in memory          Track observations across sessions
+```
+
+When spawning agents via claude-flow, include Vexp context in the agent prompt:
+1. Query `get_context_capsule` for the relevant code
+2. Pass the capsule content as part of the agent's Task prompt
+3. This gives each agent targeted context instead of reading entire files
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
