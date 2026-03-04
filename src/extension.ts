@@ -1141,6 +1141,87 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 await refreshAll();
                 return;
             }
+            case "pushAllUpToHere": {
+                if (!(await isCommitUnpushed(validatedHash))) {
+                    vscode.window.showErrorMessage(
+                        "Push All up to Here is available only for unpushed commits.",
+                    );
+                    return;
+                }
+
+                const checkedOutBranchName = await getCheckedOutBranchName();
+                if (!checkedOutBranchName) {
+                    vscode.window.showErrorMessage(
+                        "Push All up to Here is only available when a local branch is checked out.",
+                    );
+                    return;
+                }
+
+                try {
+                    await executor.run(["merge-base", "--is-ancestor", validatedHash, "HEAD"]);
+                } catch {
+                    vscode.window.showErrorMessage(
+                        `Commit ${short} is not in the current branch history.`,
+                    );
+                    return;
+                }
+
+                const currentBranch =
+                    currentBranches.find(
+                        (branch) => !branch.isRemote && branch.name === checkedOutBranchName,
+                    ) ?? {
+                        name: checkedOutBranchName,
+                        hash: "",
+                        isRemote: false,
+                        isCurrent: true,
+                        ahead: 0,
+                        behind: 0,
+                    };
+
+                let target = resolveTrackedRemoteBranch(currentBranch);
+                let setUpstream = false;
+                if (!target) {
+                    const remote = await resolveRemoteName(currentBranch);
+                    if (!remote) {
+                        vscode.window.showErrorMessage(
+                            `No remote configured for branch ${currentBranch.name}.`,
+                        );
+                        return;
+                    }
+
+                    const setUpstreamConfirm = await vscode.window.showWarningMessage(
+                        `Branch '${currentBranch.name}' has no upstream. Set upstream to '${remote}/${currentBranch.name}' and push commits up to ${short}?`,
+                        { modal: true },
+                        "Set Upstream and Push",
+                    );
+                    if (setUpstreamConfirm !== "Set Upstream and Push") return;
+
+                    target = { remote, remoteBranch: currentBranch.name };
+                    setUpstream = true;
+                }
+
+                const confirm = await vscode.window.showWarningMessage(
+                    `Push all commits up to ${short} to ${target.remote}/${target.remoteBranch}?`,
+                    { modal: true },
+                    "Push",
+                );
+                if (confirm !== "Push") return;
+
+                await runWithNotificationProgress(`Pushing commits up to ${short}...`, async () => {
+                    const destinationRef = `refs/heads/${target.remoteBranch}`;
+                    const refspec = `${validatedHash}:${destinationRef}`;
+                    await executor.run([
+                        "push",
+                        ...(setUpstream ? ["-u"] : []),
+                        target.remote,
+                        refspec,
+                    ]);
+                });
+
+                vscode.window.showInformationMessage(`Pushed commits up to ${short}.`);
+                await refreshAll();
+                return;
+            }
             case "newBranch": {
                 const branchName = await vscode.window.showInputBox({
                     prompt: `New branch from ${short}`,

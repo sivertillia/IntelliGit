@@ -128,10 +128,12 @@ describe("commit menu", () => {
     it("disables history-rewrite actions for pushed merge commits", () => {
         const mergeCommit = makeCommit({ parentHashes: ["a", "b"] });
         const items = getCommitMenuItems(mergeCommit, false);
+        const pushUpToHere = items.find((item) => item.action === "pushAllUpToHere");
         const undo = items.find((item) => item.action === "undoCommit");
         const edit = items.find((item) => item.action === "editCommitMessage");
         const drop = items.find((item) => item.action === "dropCommit");
         const rebase = items.find((item) => item.action === "interactiveRebaseFromHere");
+        expect(pushUpToHere?.disabled).toBe(true);
         expect(undo?.disabled).toBe(true);
         expect(edit?.disabled).toBe(true);
         expect(drop?.disabled).toBe(true);
@@ -149,7 +151,9 @@ describe("commit menu", () => {
     it("keeps checkout revision action in commit menu", () => {
         const items = getCommitMenuItems(makeCommit(), true);
         const checkoutRevision = items.find((item) => item.action === "checkoutRevision");
+        const pushUpToHere = items.find((item) => item.action === "pushAllUpToHere");
         expect(checkoutRevision).toBeDefined();
+        expect(pushUpToHere).toBeDefined();
         expect(items.some((item) => item.action === "checkoutMain")).toBe(false);
     });
 });

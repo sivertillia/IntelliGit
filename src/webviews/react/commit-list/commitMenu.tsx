@@ -27,6 +27,12 @@ export function getCommitMenuItems(commit: Commit, isUnpushed: boolean): CommitM
     });
     items.push({ label: "Revert Commit", action: "revertCommit" });
     items.push({
+        label: "Push All up to Here...",
+        action: "pushAllUpToHere",
+        disabled: isPushed,
+        icon: iconPush(),
+    });
+    items.push({
         label: "Undo Commit...",
         action: "undoCommit",
         disabled: isPushed || isMergeCommit,
@@ -95,6 +101,17 @@ function iconReset(): React.ReactElement {
             <path
                 fill="currentColor"
                 d="M8 2a6 6 0 1 1-4.8 2.4L1 6.6V2h4.6L4 3.6A5 5 0 1 0 8 3v-1z"
+            />
+        </svg>
+    );
+}
+
+function iconPush(): React.ReactElement {
+    return (
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+            <path
+                fill="currentColor"
+                d="M8 1l3 3H9v5H7V4H5l3-3zm-4 9h8a2 2 0 0 1 2 2v3h-1v-3a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v3H2v-3a2 2 0 0 1 2-2z"
             />
         </svg>
     );

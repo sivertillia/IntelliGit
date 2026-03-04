@@ -29,6 +29,7 @@ export const COMMIT_ACTION_VALUES = [
     "checkoutRevision",
     "resetCurrentToHere",
     "revertCommit",
+    "pushAllUpToHere",
     "undoCommit",
     "editCommitMessage",
     "dropCommit",

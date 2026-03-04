@@ -799,6 +799,63 @@ describe("extension integration", () => {
         );
     });
 
+    it("pushes commits up to selected revision from commit context action", async () => {
+        const { activate } = await import("../../src/extension");
+        gitOpsState.getBranches.mockResolvedValueOnce([
+            {
+                name: "main",
+                hash: "feed1234",
+                isRemote: false,
+                isCurrent: true,
+                upstream: "origin/main",
+                remote: "origin",
+                ahead: 2,
+                behind: 0,
+            },
+            {
+                name: "origin/main",
+                hash: "feed1234",
+                isRemote: true,
+                isCurrent: false,
+                remote: "origin",
+                ahead: 0,
+                behind: 0,
+            },
+        ]);
+        const context = {
+            extensionUri: { fsPath: "/ext", path: "/ext" },
+            subscriptions: [],
+        } as unknown as MockExtensionContext;
+
+        await activate(context);
+
+        latestCommitGraphProvider!.emitCommitAction({
+            action: "pushAllUpToHere",
+            hash: "a1b2c3d4",
+        });
+        await waitForAsync();
+
+        expect(executorRun).toHaveBeenCalledWith([
+            "merge-base",
+            "--is-ancestor",
+            "a1b2c3d4",
+            "HEAD",
+        ]);
+        expect(executorRun).toHaveBeenCalledWith([
+            "push",
+            "origin",
+            "a1b2c3d4:refs/heads/main",
+        ]);
+        expect(withProgress).toHaveBeenCalledWith(
+            expect.objectContaining({
+                location: 15,
+                title: expect.stringContaining("Pushing commits up to a1b2c3d4"),
+            }),
+            expect.any(Function),
+        );
+        expect(showInformationMessage).toHaveBeenCalledWith("Pushed commits up to a1b2c3d4.");
+    });
+
     it("opens commit diff when commit graph requests file diff", async () => {
         const { activate } = await import("../../src/extension");
         const context = {
@@ -1016,6 +1073,9 @@ describe("extension integration", () => {
         await emitCommitAction({ action: "newTag", hash: "a1b2c3d4" });
 
         gitOpsState.getUnpushedCommitHashes.mockResolvedValueOnce([]);
+        await emitCommitAction({ action: "pushAllUpToHere", hash: "a1b2c3d4" });
+
+        gitOpsState.getUnpushedCommitHashes.mockResolvedValueOnce([]);
         await emitCommitAction({ action: "undoCommit", hash: "a1b2c3d4" });
         gitOpsState.getUnpushedCommitHashes.mockResolvedValueOnce(["deadbee"]);
         await emitCommitAction({ action: "undoCommit", hash: "deadbee" });
@@ -1045,6 +1105,9 @@ describe("extension integration", () => {
         );
         expect(showErrorMessage).toHaveBeenCalledWith(
             expect.stringContaining("Invalid tag name '-bad-tag-name'"),
+        );
+        expect(showErrorMessage).toHaveBeenCalledWith(
+            "Push All up to Here is available only for unpushed commits.",
         );
         expect(showErrorMessage).toHaveBeenCalledWith(
             "Undo Commit is available only for unpushed commits.",
